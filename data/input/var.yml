@@ -1,0 +1,15 @@
+---
+# Suricata ja Arkime võrguliides (nt eth0 või ens18)
+monitor_ints:
+
+# Sisevõrgu aadressiruum (erinevad võrgud eralda komaga)
+home_net:
+
+# Elasticsearchi ja Kibana administraatori parool (kasutaja: elastic)
+elastic_pwd:
+
+# Arkime ja EveBoxi veebiliidese parool (kasutaja: admin)
+arkime_pwd:
+
+# Elasticsearchile lubatud RAM-i hulk (nt 2g või 4g)
+elastic_ram: 
