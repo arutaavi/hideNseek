@@ -1,4 +1,4 @@
-#!/bash/bin
+#!/bin/bash
 
 # Funktsioon "Teade ja väljumine" vigade puhul
 exit_with_error() {
@@ -28,18 +28,20 @@ if [ "$EUID" -ne 0 ]; then
     exit_with_error "Skripti käivitamiseks on vaja sudo õigusi!\n\nPalun käivita skript käsuga: sudo ./install.sh"
 fi
 
-# 1.2 "data" kausta kontroll (Tõstetud siia, et vältida asjatut paigaldust!)
+# 1.2 "data" kausta kontroll
 if [ ! -d "./data" ]; then
     exit_with_error "Ei leidnud vajalikku kausta 'data'!\n\nVeendu, et oled kõik failid mälupulgalt või arhiivist korrektselt lahti pakkinud ja käivitad install.sh faili otse selle õigest algkaustast."
 fi
 
 # ==================================================
-# 2. ETAPP: VÕRGU KONTROLL
+# 2. ETAPP: VÕRGU KONTROLL (ILMA VILKUMISETA)
 # ==================================================
-whiptail --title "Võrgu kontroll" --infobox "Kontrollime internetiühenduse olemasolu..." 8 50
-sleep 1
+(
+    ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1
+) | whiptail --title "Võrgu kontroll" --infobox "Kontrollime internetiühenduse olemasolu..." 8 50
 
-if ! ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
+# PIPESTATUS[0] kontrollib, kas ping õnnestus toru sees
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit_with_error "Süsteemil puudub internetiühendus!\n\nAnsible ja vajalike pakettide allalaadimiseks on vaja toimivat võrku.\n\nHyper-V puhul kontrolli, et masinal oleks küljes 'External' või 'Default Switch' tüüpi virtuaallüliti."
 fi
 
@@ -54,6 +56,7 @@ else
     "hideNseek paigaldamiseks on vaja Ansiblet, kuid seda ei leitud.\n\nKas lubad skriptil paigaldada Ansible automaatselt ametlikust PPA repositooriumist?" 12 65
 
     if [ $? -eq 0 ]; then
+        # Päris paigaldus koos progressiribaga
         {
             echo 10; echo "XXX\nUuendame süsteemi pakettide nimekirja...\nXXX"
             apt-get update -y > /dev/null 2>&1
@@ -71,11 +74,11 @@ else
             apt-get install -y ansible > /dev/null 2>&1
 
             echo 100; echo "XXX\nAnsible paigaldus on lõpetatud!\nXXX"
-            sleep 1
         } | whiptail --title "Ansible Paigaldamine" --gauge "Palun oota, valmistame süsteemi ette..." 10 60 0
 
+        # Kontrollime, kas paigaldus reaalselt õnnestus
         if ! command -v ansible-playbook &> /dev/null; then
-            exit_with_error "Midagi läks Ansible paigaldamisel valesti.\nPalun kontrolli internetiühendust ja apt repositooriume."
+            exit_with_error "Midagi läks Ansible paigaldamisel valesti.\nPalun kontrolli apt repositooriume või proovi käsitsi: apt install ansible"
         fi
     else
         exit_with_error "Paigaldus katkestati, kuna Ansiblet ei lubatud paigaldada."
@@ -83,46 +86,47 @@ else
 fi
 
 # ==================================================
-# 4. ETAPP: SCRIPTIDE KOPEERIMINE ETTENÄHTUD KAUSTA
+# 4. ETAPP: SCRIPTIDE KOPEERIMINE ETTENÄHTUD KAUSTA (ILMA VILKUMISETA)
 # ==================================================
 SIHTKAUST="/usr/share/hidenseek"
 
-whiptail --title "Failide kopeerimine" --infobox "Kopeerime Ansible skripte asukohta:\n$SIHTKAUST ..." 8 60
+(
+    mkdir -p "$SIHTKAUST"
+    cp -r ./data/* "$SIHTKAUST/"
+) | whiptail --title "Failide kopeerimine" --infobox "Kopeerime Ansible skripte asukohta:\n$SIHTKAUST ..." 8 60
 
-mkdir -p "$SIHTKAUST"
-cp -r ./data/* "$SIHTKAUST/"
-
-if [ $? -ne 0 ]; then
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit_with_error "Failide kopeerimine sihtkausta ebaõnnestus. Kontrolli ketta vaba ruumi."
 fi
-sleep 1
 
 # ==================================================
-# 5. ETAPP: GLOBAALSE KÄSU JA VAULTI LOOMINE
+# 5. ETAPP: GLOBAALSE KÄSU JA VAULTI LOOMINE (ILMA VILKUMISETA)
 # ==================================================
-whiptail --title "Seadistamine" --infobox "Luukse süsteemseid käske ja krüptovõtmeid..." 8 60
+(
+    # Luuakse Ansible Vault jaoks salajane master-võti (ainult root pääseb ligi)
+    VAULT_VOTI="/root/.hidenseek_vault"
+    if [ ! -f "$VAULT_VOTI" ]; then
+        openssl rand -base64 32 > "$VAULT_VOTI"
+        chmod 600 "$VAULT_VOTI"
+    fi
 
-VAULT_VOTI="/root/.hidenseek_vault"
-if [ ! -f "$VAULT_VOTI" ]; then
-    openssl rand -base64 32 > "$VAULT_VOTI"
-    chmod 600 "$VAULT_VOTI"
-fi
+    KASU_FAIL="/usr/local/bin/hidenseek"
 
-KASU_FAIL="/usr/local/bin/hidenseek"
-
-cat <<EOF > "$KASU_FAIL"
+    # Loome globaalse käivitusfaili
+    cat <<EOF > "$KASU_FAIL"
 #!/bin/bash
 cd $SIHTKAUST
 sudo ./main.sh "\$@"
 EOF
 
-chmod +x "$KASU_FAIL"
-chmod +x "$SIHTKAUST/main.sh"
+    # Õiguste jagamine
+    chmod +x "$KASU_FAIL"
+    chmod +x "$SIHTKAUST/main.sh"
+) | whiptail --title "Seadistamine" --infobox "Luukse süsteemseid käske ja krüptovõtmeid..." 8 60
 
-if [ ! -f "$KASU_FAIL" ]; then
+if [ ! -f "/usr/local/bin/hidenseek" ]; then
     exit_with_error "Globaalse käsu 'hidenseek' loomine ebaõnnestus."
 fi
-sleep 1
 
 # ==================================================
 # LÕPETAMINE
