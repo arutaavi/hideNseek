@@ -1,141 +1,133 @@
-#!/bin/bash
+#!/bash/bin
 
-# Terminali värvid
-ROHELINE='\033[0;32m'
-KOLLANE='\033[1;33m'
-PUNANE='\033[0;31m'
-NC='\033[0m'
-
-# Funktsioon "Vajuta suvalist klahvi, et väljuda"
-press_any_key_exit() {
-    echo -e "\n${KOLLANE}Vajuta suvalist klahvi, et väljuda...${NC}"
-    read -n 1 -s
+# Funktsioon "Teade ja väljumine" vigade puhul
+exit_with_error() {
+    local veateade="$1"
+    whiptail --title "VIGA" --msgbox "$veateade\n\nPaigaldus katkestati." 10 60
     clear
     exit 1
 }
 
-clear
-echo -e "${ROHELINE}==================================================${NC}"
-echo -e "${ROHELINE}          HIDENSEEK ESMANE PAIGALDUS              ${NC}"
-echo -e "${ROHELINE}==================================================${NC}"
-
 # ==================================================
-# 1. VAADE: ROOT KONTROLL
+# ALUSTAMINE JA KINNITUS
 # ==================================================
-echo -e "${KOLLANE}[1/4] Õiguste kontroll...${NC}"
+whiptail --title "hideNseek SOC Paigaldus" --yesno \
+"Tere tulemast hideNseek esmasesse paigaldusse!\n\nKas soovid alustada süsteemi ettevalmistamist ja komponentide kontrolli?" 12 65
 
-if [ "$EUID" -eq 0 ]; then
-    echo -e "${ROHELINE}[OK] Kasutajal on piisavad õigused (Root/Sudo).${NC}"
-else
-    echo -e "${PUNANE}[VIGA] Skripti käivitamiseks on vaja sudo õigusi!${NC}"
-    echo -e "Palun käivita skript käsuga: sudo ./install.sh"
-    press_any_key_exit
+if [ $? -ne 0 ]; then
+    clear
+    exit 0
 fi
 
 # ==================================================
-# 2. VAADE: ANSIBLE KONTROLL JA PAIGALDUS
+# 1. ETAPP: KOHALIKUD KONTROLLID (Õigused ja Failid)
 # ==================================================
-echo -e "\n${KOLLANE}[2/4] Ansible kontroll...${NC}"
 
+# 1.1 Root õiguste kontroll
+if [ "$EUID" -ne 0 ]; then
+    exit_with_error "Skripti käivitamiseks on vaja sudo õigusi!\n\nPalun käivita skript käsuga: sudo ./install.sh"
+fi
+
+# 1.2 "data" kausta kontroll (Tõstetud siia, et vältida asjatut paigaldust!)
+if [ ! -d "./data" ]; then
+    exit_with_error "Ei leidnud vajalikku kausta 'data'!\n\nVeendu, et oled kõik failid mälupulgalt või arhiivist korrektselt lahti pakkinud ja käivitad install.sh faili otse selle õigest algkaustast."
+fi
+
+# ==================================================
+# 2. ETAPP: VÕRGU KONTROLL
+# ==================================================
+whiptail --title "Võrgu kontroll" --infobox "Kontrollime internetiühenduse olemasolu..." 8 50
+sleep 1
+
+if ! ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
+    exit_with_error "Süsteemil puudub internetiühendus!\n\nAnsible ja vajalike pakettide allalaadimiseks on vaja toimivat võrku.\n\nHyper-V puhul kontrolli, et masinal oleks küljes 'External' või 'Default Switch' tüüpi virtuaallüliti."
+fi
+
+# ==================================================
+# 3. ETAPP: ANSIBLE KONTROLL JA PAIGALDUS
+# ==================================================
 if command -v ansible-playbook &> /dev/null; then
     ANSIBLE_VER=$(ansible --version | head -n 1 | awk '{print $2}')
-    echo -e "${ROHELINE}[OK] Ansible on juba paigaldatud (Versioon: $ANSIBLE_VER).${NC}"
+    whiptail --title "Ansible Kontroll" --msgbox "Ansible on juba süsteemis olemas!\nTuvastatud versioon: $ANSIBLE_VER\n\nLiigume edasi failide kopeerimise juurde." 10 60
 else
-    echo -e "${KOLLANE}[INFO] hideNseek paigaldamiseks on enne vaja paigaldada Ansible.${NC}"
+    whiptail --title "Ansible Puudub" --yesno \
+    "hideNseek paigaldamiseks on vaja Ansiblet, kuid seda ei leitud.\n\nKas lubad skriptil paigaldada Ansible automaatselt ametlikust PPA repositooriumist?" 12 65
 
-    # Küsime kasutajalt kinnitust (jaa või ei)
-    read -p "Kas soovid, et skript paigaldaks Ansible automaatselt? (j/e): " VASTUS
+    if [ $? -eq 0 ]; then
+        {
+            echo 10; echo "XXX\nUuendame süsteemi pakettide nimekirja...\nXXX"
+            apt-get update -y > /dev/null 2>&1
 
-    if [[ "$VASTUS" =~ ^[JjYy]$ ]]; then
-        echo -e "\nAlustan Ansible paigaldamist, palun oota..."
+            echo 30; echo "XXX\nPaigaldame vajalikud tugitööriisad (curl, git, whiptail)...\nXXX"
+            apt-get install -y software-properties-common curl git whiptail > /dev/null 2>&1
 
-        # Paigaldame vajalikud paketid vaikselt
-        apt-get update -y > /dev/null
-        apt-get install -y software-properties-common curl git whiptail > /dev/null
-        apt-add-repository -y ppa:ansible/ansible > /dev/null
-        apt-get update -y > /dev/null
-        apt-get install -y ansible > /dev/null
+            echo 50; echo "XXX\nLisame Ansible ametliku PPA repositooriumi...\nXXX"
+            apt-add-repository -y ppa:ansible/ansible > /dev/null 2>&1
 
-        # Kontrollime, kas paigaldus õnnestus ja kuvame versiooni
-        if command -v ansible-playbook &> /dev/null; then
-            ANSIBLE_VER=$(ansible --version | head -n 1 | awk '{print $2}')
-            echo -e "${ROHELINE}[OK] Ansible on edukalt paigaldatud! (Versioon: $ANSIBLE_VER)${NC}"
-        else
-            echo -e "${PUNANE}[VIGA] midagi läks Ansible paigaldamisel valesti.${NC}"
-            press_any_key_exit
+            echo 70; echo "XXX\nUuendame uue repositooriumi andmeid...\nXXX"
+            apt-get update -y > /dev/null 2>&1
+
+            echo 90; echo "XXX\nAlustame Ansible põhipaketi paigaldamist...\nXXX"
+            apt-get install -y ansible > /dev/null 2>&1
+
+            echo 100; echo "XXX\nAnsible paigaldus on lõpetatud!\nXXX"
+            sleep 1
+        } | whiptail --title "Ansible Paigaldamine" --gauge "Palun oota, valmistame süsteemi ette..." 10 60 0
+
+        if ! command -v ansible-playbook &> /dev/null; then
+            exit_with_error "Midagi läks Ansible paigaldamisel valesti.\nPalun kontrolli internetiühendust ja apt repositooriume."
         fi
     else
-        echo -e "${PUNANE}\n[INFO] Toimub väljumine, kuna Ansiblet ei lubatud paigaldada.${NC}"
-        press_any_key_exit
+        exit_with_error "Paigaldus katkestati, kuna Ansiblet ei lubatud paigaldada."
     fi
 fi
 
 # ==================================================
-# 3. VAADE: SCRIPTIDE KOPEERIMINE ETTENÄHTUD KAUSTA
+# 4. ETAPP: SCRIPTIDE KOPEERIMINE ETTENÄHTUD KAUSTA
 # ==================================================
-echo -e "\n${KOLLANE}[3/4] Failide kopeerimine süsteemi...${NC}"
-
 SIHTKAUST="/usr/share/hidenseek"
 
-# KONTROLL: Kas 'data' kaust üldse eksisteerib install.sh kõrval?
-if [ ! -d "./data" ]; then
-    echo -e "${PUNANE}[VIGA] Ei leidnud kausta 'data'!${NC}"
-    echo -e "Veendu, et käivitad install.sh faili otse selle õigest kaustast."
-    press_any_key_exit
-fi
+whiptail --title "Failide kopeerimine" --infobox "Kopeerime Ansible skripte asukohta:\n$SIHTKAUST ..." 8 60
 
-# Teeme kindlaks, et sihtkaust on puhas ja olemas
 mkdir -p "$SIHTKAUST"
-
-# Kopeerime kõik failid praegusest kaustast sihtkausta
 cp -r ./data/* "$SIHTKAUST/"
 
-if [ $? -eq 0 ]; then
-    echo -e "${ROHELINE}[OK] Kõik Ansible skriptid on kopeeritud kausta: $SIHTKAUST${NC}"
-else
-    echo -e "${PUNANE}[VIGA] Failide kopeerimine ebaõnnestus.${NC}"
-    press_any_key_exit
+if [ $? -ne 0 ]; then
+    exit_with_error "Failide kopeerimine sihtkausta ebaõnnestus. Kontrolli ketta vaba ruumi."
 fi
+sleep 1
 
 # ==================================================
-# 4. VAADE: GLOBAALSE KÄSU LOOMINE
+# 5. ETAPP: GLOBAALSE KÄSU JA VAULTI LOOMINE
 # ==================================================
-echo -e "\n${KOLLANE}[4/4] Globaalse käsu 'hidenseek' loomine...${NC}"
+whiptail --title "Seadistamine" --infobox "Luukse süsteemseid käske ja krüptovõtmeid..." 8 60
 
-# Luuakse Ansible Vault jaoks salajane master-võti (ainult root pääseb ligi)
 VAULT_VOTI="/root/.hidenseek_vault"
 if [ ! -f "$VAULT_VOTI" ]; then
     openssl rand -base64 32 > "$VAULT_VOTI"
     chmod 600 "$VAULT_VOTI"
-    echo -e "${ROHELINE}[OK] Süsteemi krüptovõti on loodud asukohta $VAULT_VOTI${NC}"
 fi
 
 KASU_FAIL="/usr/local/bin/hidenseek"
 
-# Loome käivitusfaili, mis liigub alati õigesse kopeeritud kausta
 cat <<EOF > "$KASU_FAIL"
 #!/bin/bash
 cd $SIHTKAUST
 sudo ./main.sh "\$@"
 EOF
 
-# Anname globaalsele käsule käivitusõigused
 chmod +x "$KASU_FAIL"
-
-# Anname igaks juhuks käivitusõiguse ka kopeeritud GUI skriptile
 chmod +x "$SIHTKAUST/main.sh"
 
-if [ -f "$KASU_FAIL" ]; then
-    echo -e "${ROHELINE}[OK] Globaalne käsk 'hidenseek' on edukalt loodud!${NC}"
-else
-    echo -e "${PUNANE}[VIGA] Globaalse käsu loomine ebaõnnestus.${NC}"
-    press_any_key_exit
+if [ ! -f "$KASU_FAIL" ]; then
+    exit_with_error "Globaalse käsu 'hidenseek' loomine ebaõnnestus."
 fi
+sleep 1
 
+# ==================================================
 # LÕPETAMINE
-echo -e "\n${ROHELINE}==================================================${NC}"
-echo -e "${ROHELINE}        ESMANE ETTEVALMISTUS ON TEHTUD!           ${NC}"
-echo -e "${ROHELINE}==================================================${NC}"
-echo -e "Nüüd võid selle esmase kausta ära kustutada või sulgeda."
-echo -e "SOC halduskeskkonna avamiseks kirjuta käsureal lihtsalt:\n"
-echo -e "   ${KOLLANE}hidenseek${NC}\n"
+# ==================================================
+whiptail --title "PAIGALDUS EDUKAS!" --msgbox \
+"hideNseek esmane ettevalmistus on edukalt tehtud!\n\nKõik skriptid on turvaliselt kopeeritud süsteemi.\n\nSelle esmase kausta võid mälupulgalt või kodukaustast nüüd ära kustutada.\n\nSOC halduskeskkonna käivitamiseks kirjuta terminalis:\n\nhidenseek" 16 65
+
+clear
